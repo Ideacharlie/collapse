@@ -1,55 +1,55 @@
-import { fal } from "@fal-ai/client";
+import Replicate from "replicate";
 import { NextRequest, NextResponse } from "next/server";
 import type { GenerateRequest } from "@/lib/types";
 
-fal.config({
-  credentials: process.env.FAL_KEY,
-});
+export const maxDuration = 300;
 
-// Seedance 2 model IDs on fal.ai
-const MODEL_TEXT_TO_VIDEO = "fal-ai/seedance-v2";
-const MODEL_IMAGE_TO_VIDEO = "fal-ai/seedance-v2/image-to-video";
+const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN });
+
+const MODEL = "bytedance/seedance-2.0" as const;
 
 export async function POST(req: NextRequest) {
   try {
     const body: GenerateRequest = await req.json();
-    const { prompt, image_url, aspect_ratio, duration, mode } = body;
+    const {
+      prompt,
+      reference_images,
+      aspect_ratio,
+      duration,
+      creativity_scale,
+      temporal_smoothing,
+    } = body;
 
     if (!prompt?.trim()) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
     }
 
-    if (mode === "image-to-video" && !image_url) {
-      return NextResponse.json({ error: "Image URL is required for image-to-video" }, { status: 400 });
-    }
-
-    const modelId = mode === "image-to-video" ? MODEL_IMAGE_TO_VIDEO : MODEL_TEXT_TO_VIDEO;
-
     const input: Record<string, unknown> = {
       prompt,
       aspect_ratio,
-      duration: parseInt(duration),
+      duration,
     };
 
-    if (mode === "image-to-video" && image_url) {
-      input.image_url = image_url;
+    if (reference_images?.length) {
+      input.reference_images = reference_images;
+    }
+    if (creativity_scale !== undefined) {
+      input.creativity_scale = creativity_scale;
+    }
+    if (temporal_smoothing !== undefined) {
+      input.temporal_smoothing = temporal_smoothing;
     }
 
-    const result = await fal.subscribe(modelId, {
-      input,
-      logs: false,
-    });
+    const output = await replicate.run(MODEL, { input });
 
-    const output = result.data as { video?: { url: string }; seed?: number };
+    // Replicate returns a FileOutput or string for video models
+    const videoUrl = output?.toString?.() ?? String(output);
 
-    if (!output?.video?.url) {
-      return NextResponse.json({ error: "No video returned from model" }, { status: 500 });
+    if (!videoUrl || videoUrl === "[object Object]") {
+      return NextResponse.json({ error: "No video URL returned from model" }, { status: 500 });
     }
 
-    return NextResponse.json({
-      video_url: output.video.url,
-      seed: output.seed,
-    });
+    return NextResponse.json({ video_url: videoUrl });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[generate]", message);
